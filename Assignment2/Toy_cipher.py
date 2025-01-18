@@ -1,4 +1,6 @@
-SBOX = [
+NUM_ROUND = 10  
+
+Sbox = [
     [0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76],
     [0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0],
     [0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15],
@@ -16,52 +18,58 @@ SBOX = [
     [0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf],
     [0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16]
 ]
-import random
 
-def AR(state, rkey):
-    # Perform XOR between the state and the round key
-    return [(state[i] ^ rkey[i]) & 0xFF for i in range(len(state))]
+NUM_ROUND = 10  
+PT = [18, 52, 86, 120] 
+key = [154, 188, 222, 240]  
 
-# Substitution Box Layer (SB)
-def SB(in_state):
-    # Substitution layer using a substitution box
+def AR(in_state, rkey):
     out_state = [0] * len(in_state)
     for i in range(len(in_state)):
-        row = (in_state[i] >> 4) & 0xF  # Extract higher nibble
-        col = in_state[i] & 0xF        # Extract lower nibble
-        out_state[i] = SBOX[row][col]   # Replace byte using SBOX
+        out_state[i] = in_state[i] ^ rkey[i]
     return out_state
 
-# Linear Mixing (LM)
-def LM(state):
-    all_xor = state[0] ^ state[1] ^ state[2] ^ state[3]
-    return [(all_xor ^ byte) & 0xFF for byte in state]
 
-# Encryption Round Function
-def Enc_Round(state, key):
-    print(f"  Before AR: {state}")
-    state = AR(state, key)  # Apply Add Round Key (AR)
-    print(f"  After AR: {state}")
-    state = SB(state)  # Apply Substitution Box (SB)
-    print(f"  After SB: {state}")
-    state = LM(state)  # Apply Linear Mixing (LM)
-    print(f"  After LM: {state}")
-    return state
+def SB(in_state):
+    out_state = [0] * len(in_state)
+    for i in range(len(in_state)):
+        row = in_state[i] >> 4
+        col = in_state[i] & 0x0F
+        out_state[i] = Sbox[row][col]
+    return out_state
 
-# Main Encryption Function
-def TC1_Enc(plaintext, key):
-    state = plaintext
-    print(f"Initial State: {state}")
-    for round_num in range(4):  # 4 rounds of encryption
-        print(f"Round {round_num + 1}:")
-        state = Enc_Round(state, key)
-    print("Final AR:")
-    return AR(state, key)
 
-# Example plaintext and key for encryption
-plaintext = [18, 52, 86, 120]  # Example 4-byte plaintext
-key = [154, 188, 222, 240]  # Example 4-byte key
+def LM(in_state):
+    out_state = [0] * len(in_state)
+    All_Xor = in_state[0] ^ in_state[1] ^ in_state[2] ^ in_state[3]
+    for i in range(len(in_state)):
+        out_state[i] = All_Xor ^ in_state[i]
+    return out_state
 
-# Start the encryption process
-ciphertext = TC1_Enc(plaintext, key)
-print(f"Ciphertext: {ciphertext}")
+
+def Enc_Round(in_state, rkey):
+    out_state = AR(in_state, rkey) 
+    print(f"After Add Roundkey: {out_state}")
+    in_state = SB(out_state)  
+    print(f"After S-box Layer: {in_state}")
+    out_state = LM(in_state)  
+    print(f"After Linear Mixing: {out_state}")
+    return out_state
+
+def TC1_Enc(PT, key):
+    NROUND = NUM_ROUND  
+    CT = PT  
+    print(f"Initial Plaintext: {CT}")
+    for i in range(NROUND):
+        print(f"Round {i+1}:")
+        CT = Enc_Round(CT, key) 
+    return CT
+
+def main():
+    NUM_ROUND = 10  
+    PT = [18, 52, 86, 120] 
+    key = [154, 188, 222, 240]  
+    CT = TC1_Enc(PT, key)
+    print(f"Final Ciphertext: {CT}")
+
+main()
