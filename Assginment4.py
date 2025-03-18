@@ -1,6 +1,27 @@
+
+
+
+# Importing necessary modules for concurrency
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
+
+
+# Defining block size for AES typically uses 16-byte blocks
 block_size = 16
+
+# RCON (Round Constants) for AES key expansion, used in the key schedule
+# These values are pre-defined constants used in AES to modify the round keys in key expansion
 RCON = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36]
+#This is a random list that I TOOK FOR THE debug output
 gmul_list = []
+
+#Comment for the SBOX (list of list)
+# The S-Box (Substitution Box) used in AES encryption.
+# It is a non-linear byte substitution table used to perform the substitution step in AES encryption and decryption.
+# Each byte in the state matrix is substituted with a corresponding byte from the S-Box during the SubBytes step.
+# The S-Box is a fixed, pre-defined 16x16 matrix, where each element is a unique byte value.
+# The S-Box is designed to provide confusion, making the encryption more secure against attacks like differential and linear cryptanalysis.
+
 SBOX = [
     [0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76],
     [0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0],
@@ -20,18 +41,33 @@ SBOX = [
     [0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16]
 ]
 
+#Comment for rotate word func
+# Rotates a word (list) by one position to the left, moving the first element to the last position.
 def rotate(word):
     result = word[1:] + word[:1]
     return result
 
+#Comment For sub word
+# The sub_word function takes a list of bytes (word) and applies the S-box substitution
+# to each byte. It processes each byte by splitting it into two nibbles: the high n (first 4 bits)
+# and the low n (last 4 bits). It then uses the S-box lookup table to substitute each nibble
+# with a corresponding value from the table. The transformed bytes are collected in a new list and returned.
 def sub_word(word):
     transformed_word = []
     for byte in word:
-        high_nibble = byte >> 4
-        low_nibble = byte & 0x0F
-        transformed_byte = SBOX[high_nibble][low_nibble]
+        high_n = byte >> 4
+        low_n = byte & 0x0F
+        transformed_byte = SBOX[high_n][low_n]
         transformed_word.append(transformed_byte)
     return transformed_word
+
+#This is the function that takes the key as and generate the key expansion or the key schedule
+#I have use the key schedule as the word instaed of the expansion as most of the article refer that step as key schedule
+# The `generate_key` function creates the key schedule for AES encryption. 
+# The key schedule expands the initial key into 176 bytes for 10 rounds (AES-128).
+# 1. Start with the initial 16-byte key as the `key_schedule`.
+# 2. Iterate from index 16 to 176, adding 4 bytes per iteration.
+# 3. Append the result of XORing the previous 4 bytes with the 4 bytes 16 positions earlier.
 
 def generate_key(key):
     key_schedule = key[:]
@@ -43,15 +79,25 @@ def generate_key(key):
         key_schedule += [key_schedule[i - 16 + j] ^ temp[j] for j in range(4)]
     return key_schedule
 
+#Comment for printing key 
+#This is the function that takes the input as matrix and then print 
+#All the column it also convert the column to hexadecimal representation and then prints it sequentially 
 def printer(plaintext_state_matrix):
     for col in plaintext_state_matrix:
         hex_col = [f'{value:02x}' for value in col]
         print(hex_col)
     print()
 
+
+#Comment for Galois field multiplication
+# This function performs Galois Field (GF) multiplication in GF(2^8), commonly used in cryptographic algorithms like AES. 
+# It takes two 8-bit integers, `factor_a` and `factor_b`, and computes their product in the Galois field using bitwise operations. 
+# The multiplication is carried out by iterating over each bit of `factor_b`, shifting `factor_a` left, 
+# and reducing it by XORing with the irreducible polynomial `0x1b` if necessary. 
+# The result is kept within 8 bits by applying modulo 256, and the final product is returned after 8 iterations.
 def galois_field_multiply(factor_a, factor_b):
-    product = 0
     num_iterations = 0
+    product = 0
     while num_iterations < 8:
         if factor_b & 1:
             product ^= factor_a
@@ -64,53 +110,95 @@ def galois_field_multiply(factor_a, factor_b):
     gmul_list.append(product % 256)
     return product % 256
 
+
+#Comment for XOR func 
+# This function below performs bitwise XOR between elements of a matrix and a round key. 
+# It processes a specific column (indexed by `j`) from both the `matrix` and `round_lists`, 
+# where the matrix is assumed to be in a flattened form. 
+# For each row, it retrieves the corresponding element from both the matrix and round key, applies the XOR operation, 
+# and appends the result to `column_result`, which is then returned after processing all rows.
+
+def xor(matrix, round_lists, j):
+    column_result = []
+    for i in range(4):
+        matrix_value = matrix[i * 4 + j]
+        round_key_value = round_lists[i * 4 + j]
+        xor_result = matrix_value ^ round_key_value
+        column_result.append(xor_result)
+    return column_result
+
+#comment for Round key adder function 
+# The `roundkey_adder` function adds the round key to the current state matrix by performing bitwise XOR. 
+# It first flattens the `state` matrix from a 4x4 structure into a 1D list, `matrix`, by iterating over each column. 
+# The round key is then assigned to `round_lists`. To efficiently compute the XOR for each column, 
+# the function utilizes `ThreadPoolExecutor` to parallelize the operation, calling the `xor` function for each column (indexed by `j`).
+# The results of each parallelized XOR operation are gathered into the `result_matrix`, which is then returned.
 def roundkey_adder(state, round_key):
     matrix = []
     for cols in range(4):
         for row in range(4):
             matrix.append(state[row][cols])
-    
     round_lists = round_key
     result_matrix = []
-
-    for j in range(4):
-        column_result = []
-        for i in range(4):
-            matrix_value = matrix[i * 4 + j]
-            round_key_value = round_lists[i * 4 + j]
-            xor_result = matrix_value ^ round_key_value
-            column_result.append(xor_result)
-        result_matrix.append(column_result)
-
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        result_matrix = list(executor.map(lambda j: xor(matrix, round_lists, j), range(4)))
     return result_matrix
+
+#comment for the Pad function
+# The `pad` function ensures the plaintext is a multiple of the block size by adding padding bytes at the end.
+# It calculates the necessary padding length and appends that many bytes, each equal to the padding length, to the plaintext.
 
 def pad(plaintext):
     print("Since the palintext was not 16 multiple we are paddng it to nearest 16 multiple ")
     padding_length = block_size - (len(plaintext) % block_size)
     return plaintext + [padding_length] * padding_length
 
-
+#Comment for the unpad function
+# The `unpad` function reverses this padding process by removing the padding bytes, 
+# using the last byte to determine how much padding was added.
 
 def unpad(padded_text):
     padding_length = padded_text[-1]
     return padded_text[:-padding_length]
 
+#Comment for subustitue row func
+# The `substitute_row` function performs the SubBytes operation on a single row of the state matrix.
+# It iterates through each byte in the row and looks up the corresponding byte in the 
+# SBOX using the high nibble (left 4 bits) and low nibble (right 4 bits).
+# The substituted byte is appended to a new list, which represents the transformed row after applying the substitution.
+def substitute_row(row):
+    substituted_row = []
+    for b in row:
+        substituted_byte = SBOX[b >> 4][b & 0x0F]
+        substituted_row.append(substituted_byte)
+    return substituted_row
 
-def subustution_funcs(state):
+#Comment for subustitue funcs
+# The `substitution_funcs` function applies the SubBytes operation to the entire state matrix.
+# It uses a `ThreadPoolExecutor` to parallelize the substitution of each row in the state matrix, improving performance.
+# For each row in the state, the `substitute_row` function is called, which transforms each byte in the row using the SBOX.
+# The substituted rows are collected and combined into the final substituted state matrix, which is then returned.
+def substitution_funcs(state):
     substituted_state = []
-    for row in state:
-        substituted_row = []
-        for b in row:
-            substituted_byte = SBOX[b >> 4][b & 0x0F]
-            substituted_row.append(substituted_byte)
-        substituted_state.append(substituted_row)
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        substituted_state = list(executor.map(substitute_row, state))
     return substituted_state
 
-def shift_rows(state_matrix):
-    for i in range(1,4):
-        state_matrix[i] = state_matrix[i][i:] + state_matrix[i][:i]
-    return state_matrix
+#Comment for shift function
+# The `shift_rows` function performs the ShiftRows operation on the state matrix, which is part of the AES cipher.
+# It shifts the rows of the matrix cyclically to the left. 
+# Row i is shifted by i positions (e.g., second row by 1, third by 2).
 
+def shift_rows(matrix):
+    for i in range(1,4):
+        matrix[i] = matrix[i][i:] + matrix[i][:i]
+    return matrix
+
+
+#Comment for the cleaner func
+#The cleaner function takes a 4x4 state matrix and converts each element into its corresponding
+#two-digit hexadecimal representation. It iterates through the matrix, formats the values, and
+#appends them to a list, which is then joined into a single string and returned. 
 def cleaner(plaintext_state_matrix):
     output = []
     for r in range(4):
@@ -120,42 +208,64 @@ def cleaner(plaintext_state_matrix):
     result = ''.join(output)
     return result
 
+#Comment for Mix col ops for colnmns
+# The `mix_col_operations_for_column` function applies the MixColumns transformation
+# to a single column of the state matrix. It processes the four values of the column by 
+# performing Galois field multiplication with constants 0x02 and 0x03, and XORing them 
+# in specific combinations as defined by the AES standard. The transformed values are then 
+# placed back into the state matrix.
 
+
+def mix_col_operations_for_column(column_index, plaintext_state_matrix):
+    top_value = plaintext_state_matrix[0][column_index]
+    upper_middle_value = plaintext_state_matrix[1][column_index]
+    lower_middle_value = plaintext_state_matrix[2][column_index]
+    bottom_value = plaintext_state_matrix[3][column_index]
+
+    plaintext_state_matrix[0][column_index] = (
+        galois_field_multiply(0x02, top_value) ^
+        galois_field_multiply(0x03, upper_middle_value) ^
+        lower_middle_value ^
+        bottom_value
+    )
+    plaintext_state_matrix[1][column_index] = (
+        top_value ^
+        galois_field_multiply(0x02, upper_middle_value) ^
+        galois_field_multiply(0x03, lower_middle_value) ^
+        bottom_value
+    )
+    plaintext_state_matrix[2][column_index] = (
+        top_value ^
+        upper_middle_value ^
+        galois_field_multiply(0x02, lower_middle_value) ^
+        galois_field_multiply(0x03, bottom_value)
+    )
+    plaintext_state_matrix[3][column_index] = (
+        galois_field_multiply(0x03, top_value) ^
+        upper_middle_value ^
+        lower_middle_value ^
+        galois_field_multiply(0x02, bottom_value)
+    )
+
+#Comment for the Mix_col_ops
+# The `mix_col_ops` function executes the MixColumns transformation for all four columns 
+# in parallel. It uses a `ThreadPoolExecutor` to handle the column-wise operations concurrently, 
+# improving the performance by processing each column in a separate thread. Once all columns are processed, 
+# the function returns the updated state matrix.
 def mix_col_ops(plaintext_state_matrix):
-    column_index = 0
-    while column_index < 4:
-        top_value = plaintext_state_matrix[0][column_index]
-        upper_middle_value = plaintext_state_matrix[1][column_index]
-        lower_middle_value = plaintext_state_matrix[2][column_index]
-        bottom_value = plaintext_state_matrix[3][column_index]
-        
-        plaintext_state_matrix[0][column_index] = (
-            galois_field_multiply(0x02, top_value) ^
-            galois_field_multiply(0x03, upper_middle_value) ^
-            lower_middle_value ^
-            bottom_value
-        )
-        plaintext_state_matrix[1][column_index] = (
-            top_value ^
-            galois_field_multiply(0x02, upper_middle_value) ^
-            galois_field_multiply(0x03, lower_middle_value) ^
-            bottom_value
-        )
-        plaintext_state_matrix[2][column_index] = (
-            top_value ^
-            upper_middle_value ^
-            galois_field_multiply(0x02, lower_middle_value) ^
-            galois_field_multiply(0x03, bottom_value)
-        )
-        plaintext_state_matrix[3][column_index] = (
-            galois_field_multiply(0x03, top_value) ^
-            upper_middle_value ^
-            lower_middle_value ^
-            galois_field_multiply(0x02, bottom_value)
-        )
-        column_index += 1
+    with ThreadPoolExecutor() as executor:
+        for column_index in range(4):
+            executor.submit(mix_col_operations_for_column, column_index, plaintext_state_matrix)
     
     return plaintext_state_matrix
+
+#Comment for the create plaintext state matrix
+# The `create_plaintext_state_matrix` function takes a plaintext list and converts it into a 
+# 4x4 state matrix, as required by the AES encryption algorithm. It iterates over the plaintext list, 
+# collecting every 4th byte starting from the corresponding position in each column (0, 1, 2, 3) 
+# to form the rows of the matrix. This transformation allows the plaintext to be represented 
+# in a 4x4 grid, where each element corresponds to a byte of the input data.
+# The function returns the state matrix, which is used in subsequent AES transformations.
 
 def create_plaintext_state_matrix(plaintext_list):
     plaintext_state_matrix = []
@@ -166,6 +276,14 @@ def create_plaintext_state_matrix(plaintext_list):
         plaintext_state_matrix.append(row)
     return plaintext_state_matrix
 
+#Comment for the AES encryption  func
+# The `AES_encrypt` function performs AES encryption on the given plaintext using the provided key and number of rounds. 
+# It starts by generating the key schedule and creating the initial state matrix from the plaintext. 
+# The round key is added to the state matrix, and the function proceeds through multiple rounds of substitution, 
+# row shifting, column mixing, and round key addition. In the final round, the column mixing step is skipped, 
+# and the encrypted output is produced after the final round key is added. 
+# The function prints the state matrix at each stage for debugging and visualization purposes, 
+# and the final encrypted output is returned as a hexadecimal string.
 def AES_encrypt(plaintext_list, key_list, rounds):
 
     output_key = generate_key(key_list)
@@ -178,8 +296,8 @@ def AES_encrypt(plaintext_list, key_list, rounds):
     printer(plaintext_state_matrix)
     
     for loops in range(1, rounds):
-        print("RUNNING AT STAGE ",rounds)
-        plaintext_state_matrix = subustution_funcs(plaintext_state_matrix)
+        print("RUNNING AT STAGE ",loops)
+        plaintext_state_matrix = substitution_funcs(plaintext_state_matrix)
         print("After Substitution ")
         printer(plaintext_state_matrix)
         plaintext_state_matrix = shift_rows(plaintext_state_matrix)
@@ -193,7 +311,7 @@ def AES_encrypt(plaintext_list, key_list, rounds):
         printer(plaintext_state_matrix)
         
     print("Running at the last stage")
-    plaintext_state_matrix = subustution_funcs(plaintext_state_matrix)
+    plaintext_state_matrix = substitution_funcs(plaintext_state_matrix)
     print("After substitution ")
     printer(plaintext_state_matrix)
     plaintext_state_matrix = shift_rows(plaintext_state_matrix)
@@ -206,8 +324,14 @@ def AES_encrypt(plaintext_list, key_list, rounds):
     printer(plaintext_state_matrix)
     output = cleaner(plaintext_state_matrix)
     print()
-    return output
+    
+    return output 
 
+#Comment for the resolve plaintext func 
+# The `resolve_plaintext` function converts a hexadecimal string into a list of decimal values. 
+# It processes the string by iterating over pairs of hexadecimal characters, converting each pair to a decimal value, 
+# and appending it to a list. This list represents the plaintext in decimal form. 
+# The function also prints the resulting list of decimal values for debugging or visualization purposes before returning it.
 def resolve_plaintext(hex_string):
     plain_text = []
     for i in range(0, len(hex_string), 2):
@@ -219,6 +343,11 @@ def resolve_plaintext(hex_string):
     print(plain_text)
     return plain_text
 
+#Comment for the resolve keytype funcs
+# The `resolve_ketype` function converts a hexadecimal string into a list of decimal values representing a key. 
+# It processes the string by iterating over pairs of hexadecimal characters, converting each pair into its decimal equivalent, 
+# and appending it to a list. This list represents the encryption/decryption key in decimal form. 
+# The function prints the resulting key list for visualization or debugging before returning the list.
 def resolve_ketype(hex_string):
     key_list = []
     for i in range(0, len(hex_string), 2):
@@ -230,6 +359,12 @@ def resolve_ketype(hex_string):
     print(key_list)
     return key_list
 
+# This function performs a distinguishing attack on a cryptographic oracle.  
+# It initializes a 15-byte constant plaintext and iterates through all 256 possible  
+# values for the first byte, encrypting each modified plaintext using the oracle.  
+# The ciphertext bytes are XORed together across all iterations to check for patterns.  
+# If all XOR results are zero, it returns 0 (indicating a potential weakness),  
+# otherwise, it returns 1 (suggesting the oracle behaves randomly as expected).  
 def distinguishingAttack(oracle, key, numRounds):
     constant = []
     for i in range(15):
@@ -267,6 +402,19 @@ def distinguishingAttack(oracle, key, numRounds):
         return 1
 
 
+#Main func calls
+# The `main` function serves as the entry point for the AES encryption process. 
+# It first prompts the user to input the number of rounds for the AES encryption. 
+# Then, it defines the plaintext and key in hexadecimal format, calling `resolve_ketype` to convert the key into a list of decimal values, 
+# and `resolve_plaintext` to convert the plaintext hex string into a list of decimal values. 
+# Finally, it invokes the `AES_encrypt` function, passing the prepared plaintext, key, and round count to perform the encryption.
+# The function `distinguishingAttack` is called with an AES encryption oracle,  
+# a key list, and the number of rounds to determine if the encryption follows  
+# a reduced-round AES pattern or a random permutation.  
+# If the function returns 0, it indicates a reduced-round AES was detected.  
+# Otherwise, it suggests the encryption behaves like a random permutation.  
+# Finally, the ciphertext output is printed for further inspection.  
+
 def main():
     num_rounds = int(input(" enter the round "))
     plaintext_hex = "3243f6a8885a308d313198a2e0370734"
@@ -274,8 +422,6 @@ def main():
     key_list =  resolve_ketype(key_hex)
     plaintext_list = resolve_plaintext(plaintext_hex)
     output =  AES_encrypt(plaintext_list , key_list, num_rounds)
-    print("This is the ciphertext below ")    
-    print(output)
     rebit = distinguishingAttack(AES_encrypt ,key_list, num_rounds)
     if rebit == 0:
         
@@ -284,5 +430,8 @@ def main():
         
         print(rebit,">>Random permutation detected.")
         
-
+    print("This is the ciphertext below ")    
+    print(output)    
+#MAIN FUNCTION CALL    
 main()
+
