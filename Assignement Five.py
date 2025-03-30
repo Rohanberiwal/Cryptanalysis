@@ -23,29 +23,37 @@ s = [
         4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
         6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21
     ]
+    
+
 def leftrotate(x, c):
-    return ((x << c) | (x >> (32 - c))) & 0xFFFFFFFF
+    x = x & 0xFFFFFFFF
+    left_shifted = x << c
+    right_shifted = x >> (32 - c)
+    result = (left_shifted | right_shifted) & 0xFFFFFFFF
+    return result
 
 def int_to_bytes(n, length):
     result = bytearray()
-    for _ in range(length):
+    for counts in range(length):
         result.append(n & 0xFF)
         n >>= 8
     return bytes(result)
 
 def pad_message(message_bytes):
-    orig_len_bits = len(message_bytes) * 8
+    size  = len(message_bytes) * 8
     message_bytes += b'\x80'
     while (len(message_bytes) % 64) != 56:
         message_bytes += b'\x00'
-    message_bytes += int_to_bytes(orig_len_bits, 8)
+    message_bytes = message_bytes + int_to_bytes(size, 8)
     return message_bytes
 
 def process_chunk(chunk, A, B, C, D, K, s):
     M = []
     for i in range(16):
         j = i * 4
-        m_val = chunk[j] | (chunk[j+1] << 8) | (chunk[j+2] << 16) | (chunk[j+3] << 24)
+        m_val = 0
+        for k in range(4):
+            m_val |= chunk[j + k] << (8 * k)
         M.append(m_val)
     a, b, c, d = A, B, C, D
     for i in range(64):
@@ -76,24 +84,27 @@ def process_chunk(chunk, A, B, C, D, K, s):
 def to_hex(n):
     hex_str = ''
     for i in range(4):
-        hex_str += '{:02x}'.format((n >> (i * 8)) & 0xFF)
+        shift_amount = i * 8
+        shifted_value = n >> shift_amount
+        byte_value = shifted_value & 0xFF
+        hex_byte = '{:02x}'.format(byte_value)
+        hex_str += hex_byte
     return hex_str
 
-def md5(message):
-    if isinstance(message, str):
-        message = message.encode('utf-8')
-    message = pad_message(message)
-    
+
+def md5(message):        
     A = 0x67452301
     B = 0xefcdab89
     C = 0x98badcfe
     D = 0x10325476
-   
+    if isinstance(message, str):
+        message = message.encode('utf-8')
+    message = pad_message(message)    
     for offset in range(0, len(message), 64):
         chunk = message[offset:offset+64]
         A, B, C, D = process_chunk(chunk, A, B, C, D, K, s)
-    
-    return to_hex(A) + to_hex(B) + to_hex(C) + to_hex(D)
+    hashedresult = to_hex(A) + to_hex(B) + to_hex(C) + to_hex(D)
+    return hashedresult
 
 def display_results():
     test_inputs = [
